@@ -16,3 +16,20 @@ def test_xgboost_classifier():
     clf.train(X, y)
     preds = clf.predict(X)
     assert len(preds) == 20, "Classifier must return predictions for all inputs"
+def test_health_scorer_normal():
+    from src.models.health_scorer import AssetHealthAssessor
+    scorer = AssetHealthAssessor()
+    health = scorer.calculate_health_score(temp_c=50, current_a=400)
+    assert health == 100.0, "Equipment under rated specs should have 100 health"
+
+def test_health_scorer_degradation():
+    from src.models.health_scorer import AssetHealthAssessor
+    scorer = AssetHealthAssessor()
+    health = scorer.calculate_health_score(temp_c=90, current_a=700)
+    assert health < 100.0, "Equipment operating above rated specs must degrade"
+
+def test_rul_estimation():
+    from src.models.health_scorer import AssetHealthAssessor
+    scorer = AssetHealthAssessor()
+    rul = scorer.estimate_rul(health_score=65.0, degradation_rate=0.1)
+    assert rul == 350.0, "RUL should correctly calculate days remaining"
