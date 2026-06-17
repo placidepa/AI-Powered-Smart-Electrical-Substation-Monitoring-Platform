@@ -1,0 +1,17 @@
+platform:
+  name: "Smart Substation Analytics"
+  environment: "production"
+
+data:
+  ingestion_rate_hz: 50
+  retention_days: 365
+
+models:
+  autoencoder:
+    epochs: 50
+    batch_size: 64
+  xgboost:
+    max_depth: 5
+
+alerts:
+  idempotency_ttl_seconds: 300
