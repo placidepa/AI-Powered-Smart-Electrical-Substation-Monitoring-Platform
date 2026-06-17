@@ -11,6 +11,7 @@ import plotly.graph_objs as go
 # Ensure backend models can be imported
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.models.health_scorer import AssetHealthAssessor
+from src.utils.redis_store import load_latest_readings, push_reading, redis_status
 
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
@@ -41,6 +42,10 @@ health_assessor = AssetHealthAssessor()
 
 
 def load_initial_data():
+    redis_records = load_latest_readings(max_records=120)
+    if redis_records:
+        return redis_records
+
     if os.path.exists(DATA_PATH):
         df = pd.read_csv(DATA_PATH)
         df["timestamp"] = pd.to_datetime(df["timestamp"]).astype(str)
@@ -122,7 +127,46 @@ def metric_card(title, value_id, class_name="text-info text-center"):
                 dbc.CardBody(html.H3(id=value_id, className=class_name)),
             ]
         ),
-        width=3,
+        width=True,
+    )
+
+
+def build_new_reading(
+    trigger,
+    voltage_kv,
+    current_a,
+    transformer_temp_c,
+    oil_temp_c,
+    power_factor,
+    fault_label,
+):
+    selected_fault = int(fault_label or 0) if trigger == "inject-fault" else 0
+
+    voltage_kv += float(np.random.normal(0, 0.25))
+    current_a += float(np.random.normal(0, 8))
+    transformer_temp_c += float(np.random.normal(0, 0.5))
+    oil_temp_c += float(np.random.normal(0, 0.4))
+
+    if selected_fault:
+        voltage_kv, current_a, transformer_temp_c, oil_temp_c = apply_fault_signature(
+            voltage_kv,
+            current_a,
+            transformer_temp_c,
+            oil_temp_c,
+            selected_fault,
+        )
+        label = selected_fault
+    else:
+        label = infer_fault_label(voltage_kv, current_a, transformer_temp_c, oil_temp_c)
+
+    return make_reading(
+        timestamp=pd.Timestamp.now(),
+        voltage_kv=voltage_kv,
+        current_a=current_a,
+        transformer_temp_c=transformer_temp_c,
+        oil_temp_c=oil_temp_c,
+        power_factor=power_factor,
+        fault_label=label,
     )
 
 
@@ -145,6 +189,7 @@ app.layout = dbc.Container(
                 metric_card("Active Anomalies", "active-anomalies"),
                 metric_card("Est. Remaining Useful Life", "rul-days"),
                 metric_card("System Status", "system-status"),
+                metric_card("Data Source", "data-source"),
             ],
             className="mb-4",
         ),
@@ -343,39 +388,26 @@ def update_telemetry_store(
     stream_enabled = "on" in (stream_toggle or [])
 
     if trigger == "interval-component" and not stream_enabled:
+        redis_records = load_latest_readings()
+        if redis_records:
+            return redis_records
         return records
 
     records = records or []
-    selected_fault = int(fault_label or 0) if trigger == "inject-fault" else 0
-
-    voltage_kv += float(np.random.normal(0, 0.25))
-    current_a += float(np.random.normal(0, 8))
-    transformer_temp_c += float(np.random.normal(0, 0.5))
-    oil_temp_c += float(np.random.normal(0, 0.4))
-
-    if selected_fault:
-        voltage_kv, current_a, transformer_temp_c, oil_temp_c = apply_fault_signature(
-            voltage_kv,
-            current_a,
-            transformer_temp_c,
-            oil_temp_c,
-            selected_fault,
-        )
-        label = selected_fault
-    else:
-        label = infer_fault_label(voltage_kv, current_a, transformer_temp_c, oil_temp_c)
-
-    records.append(
-        make_reading(
-            timestamp=pd.Timestamp.now(),
-            voltage_kv=voltage_kv,
-            current_a=current_a,
-            transformer_temp_c=transformer_temp_c,
-            oil_temp_c=oil_temp_c,
-            power_factor=power_factor,
-            fault_label=label,
-        )
+    reading = build_new_reading(
+        trigger,
+        voltage_kv,
+        current_a,
+        transformer_temp_c,
+        oil_temp_c,
+        power_factor,
+        fault_label,
     )
+
+    if push_reading(reading):
+        return load_latest_readings()
+
+    records.append(reading)
     return records[-300:]
 
 
@@ -389,14 +421,18 @@ def update_telemetry_store(
     Output("rul-days", "className"),
     Output("system-status", "children"),
     Output("system-status", "className"),
+    Output("data-source", "children"),
+    Output("data-source", "className"),
     Input("telemetry-store", "data"),
 )
 def update_dashboard(records):
     live_df = pd.DataFrame(records or [], columns=FEATURE_COLUMNS)
     fig = go.Figure()
+    source_text = redis_status()
+    source_class = "text-success text-center" if source_text == "Redis Online" else "text-info text-center"
 
     if live_df.empty:
-        return fig, "100.0 / 100", "text-success text-center", "0", "text-info text-center", "1400.0 Days", "text-success text-center", "STABLE", "text-success text-center"
+        return fig, "100.0 / 100", "text-success text-center", "0", "text-info text-center", "1400.0 Days", "text-success text-center", "STABLE", "text-success text-center", source_text, source_class
 
     latest = live_df.iloc[-1]
     health = float(
@@ -470,6 +506,8 @@ def update_dashboard(records):
         rul_class,
         status_text,
         status_class,
+        source_text,
+        source_class,
     )
 
 
