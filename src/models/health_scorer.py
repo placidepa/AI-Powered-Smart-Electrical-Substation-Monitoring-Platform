@@ -13,9 +13,12 @@ class AssetHealthAssessor:
         '''
         Penalty function: Exponential decay if operating above rated parameters.
         '''
-        # Calculate stress penalties
-        temp_penalty = np.where(temp_c > rated_temp, (temp_c - rated_temp) ** 1.2 * 0.1, 0)
-        current_penalty = np.where(current_a > rated_current, (current_a - rated_current) ** 1.1 * 0.05, 0)
+        # Calculate stress penalties without taking fractional powers of
+        # negative values, which can produce invalid scalar warnings.
+        temp_excess = np.maximum(np.asarray(temp_c) - rated_temp, 0)
+        current_excess = np.maximum(np.asarray(current_a) - rated_current, 0)
+        temp_penalty = temp_excess ** 1.2 * 0.1
+        current_penalty = current_excess ** 1.1 * 0.05
         
         health = self.base_health - temp_penalty - current_penalty
         return np.clip(health, 0, 100)
